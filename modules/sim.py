@@ -40,7 +40,7 @@ class MCProb:
         X0: initial ensemble 
         save_folder: folder to save the generated data
     """
-    def __init__(self, save_folder, n_subdivs, mu=None, sigma=None, X0=None):
+    def __init__(self, save_folder, n_subdivs, mu=None, sigma=None, X0=None, tick_size=15, title_size=15, cbar_tick_size=10):
         self.X = X0 
         self.mu = mu 
         self.sigma = sigma
@@ -50,6 +50,9 @@ class MCProb:
         self.dim = X0.shape[-1]
         self.grid = Grid(dim=self.dim)
         self.total_sims = self.n_particles
+        self.tick_size = tick_size
+        self.cbar_tick_size = cbar_tick_size
+        self.title_size = title_size
 
     @ut.timer
     def propagate(self, n_steps, dt):
@@ -141,7 +144,7 @@ class MCProb:
 
         self.get_grid()
         centers = self.grid.mins + boxes * self.grid.h + self.grid.h / 2.
-        probs = counts / self.total_sims
+        probs = counts / (self.total_sims * self.grid.dV)
         idx = np.argsort(probs)
 
         pd.DataFrame(centers[idx][::-1]).to_csv('{}/centers.csv'.format(self.save_folder), index=None, header=None)
@@ -149,7 +152,7 @@ class MCProb:
 
 
     @ut.timer
-    def compute_p2(self, i, j):
+    def compute_p2(self, i, j, save=True):
         """
         Description: Computes probability in each box in a two-dimensional grid
 
@@ -163,25 +166,39 @@ class MCProb:
         pd.DataFrame(counts).to_csv('{}/counts_{}_{}.csv'.format(self.save_folder, i, j), index=None, header=None)
 
         self.get_grid()
-        x = np.linspace(self.grid.mins[i], self.grid.maxs[i], num=self.n_subdivs)
-        y = np.linspace(self.grid.mins[j], self.grid.maxs[j], num=self.n_subdivs)
+        x = np.linspace(self.grid.mins[i], self.grid.maxs[i], num=self.n_subdivs+1)[1:]
+        y = np.linspace(self.grid.mins[j], self.grid.maxs[j], num=self.n_subdivs+1)[1:]
         prob = np.zeros((self.n_subdivs, self.n_subdivs))
         
         for k, b in enumerate(boxes):
             prob[int(b[0]), int(b[1])] = counts[k] 
 
-        prob /= np.sum(prob)
+        prob /= np.sum(prob) * self.grid.h[i] * self.grid.h[j]
         x, y = np.meshgrid(x, y)
+        if not save:
+            return prob
         fig = plt.figure(figsize=(8, 8))
         ax = fig.add_subplot(111)
-        im = ax.pcolormesh(x, y, prob, cmap='inferno', shading='auto')
-        fig.colorbar(im)
+        im = ax.pcolormesh(x, y, prob, cmap='inferno_r', shading='auto')
+        cbar = fig.colorbar(im)
+        cbar.ax.tick_params(labelsize=self.cbar_tick_size)
         ax.set_xlabel(r'$x_{}$'.format(i))
         ax.set_ylabel(r'$x_{}$'.format(j))
-        ax.set_title(r'MC estimate of $p(x_{}, x_{})$ at time = {:.4f}'.format(i, j, self.final_time))
+        def get_char(c):
+            if c == 0:
+                return 'x'
+            elif c == 1:
+                return 'y'
+            elif c == 2:
+                return 'z'
+
+        ax.set_title(r'MC estimate of $p({}, {})$ at time = {:.4f}'.format(get_char(i), get_char(j), self.final_time), fontsize=self.title_size)
+        ax.tick_params(axis='both', which='major', labelsize=self.tick_size)
+        ax.tick_params(axis='both', which='minor', labelsize=self.tick_size)
         plt.tight_layout()
         plt.savefig('{}/p_{}_{}_mc_steps_{}.png'.format(self.save_folder, i, j, self.n_steps))
         plt.close(fig)
+        
 
 
     @ut.timer
@@ -198,12 +215,12 @@ class MCProb:
         pd.DataFrame(counts).to_csv('{}/counts_{}.csv'.format(self.save_folder, i), index=None, header=None)
 
         self.get_grid()
-        x = np.linspace(self.grid.mins[i], self.grid.maxs[i], num=self.n_subdivs)
+        x = np.linspace(self.grid.mins[i], self.grid.maxs[i], num=self.n_subdivs+1)[1:]
         prob = np.zeros(self.n_subdivs)
         for k, b in enumerate(boxes):
             prob[int(b)] = counts[k]
 
-        prob /= np.sum(prob)
+        prob /= np.sum(prob) * self.grid.h[i]
         fig = plt.figure(figsize=(8, 8))
         ax = fig.add_subplot(111)
         ax.plot(x, prob)
@@ -262,10 +279,10 @@ class MCProb:
         pts = self.get_slice_pts(dims, levels, eps)
         self.get_grid()
         i, j = sorted(dims)
-        x = np.linspace(self.grid.mins[i], self.grid.maxs[i], num=self.n_subdivs)
-        y = np.linspace(self.grid.mins[j], self.grid.maxs[j], num=self.n_subdivs)
+        x = np.linspace(self.grid.mins[i], self.grid.maxs[i], num=self.n_subdivs+1)
+        y = np.linspace(self.grid.mins[j], self.grid.maxs[j], num=self.n_subdivs+1)
         prob = np.zeros((self.n_subdivs, self.n_subdivs))
-        coords = ((pts - self.grid.mins) / self.grid.h).astype(i)
+        coords = ((pts - self.grid.mins) / self.grid.h).astype('float32')
         boxes, counts = np.unique(coords[:, [i, j]], return_counts=True, axis=0)
         
 
@@ -276,7 +293,7 @@ class MCProb:
         x, y = np.meshgrid(x, y)
         fig = plt.figure(figsize=(8, 8))
         ax = fig.add_subplot(111)
-        im = ax.pcolormesh(x, y, prob, cmap='inferno', shading='auto')
+        im = ax.pcolormesh(x, y, prob, cmap='inferno_r', shading='auto')
         fig.colorbar(im)
         ax.set_xlabel(r'$x_{}$'.format(i))
         ax.set_ylabel(r'$x_{}$'.format(j))
@@ -416,7 +433,7 @@ class FKSimGrid3_2:
 
         fig = plt.figure(figsize=(8, 8))
         ax = fig.add_subplot(111)
-        im = ax.pcolormesh(x, y, p, cmap='inferno', shading='auto')
+        im = ax.pcolormesh(x, y, p, cmap='inferno_r', shading='auto')
         ax.set_xlabel(r'$x_{}$'.format(i))
         ax.set_ylabel(r'$x_{}$'.format(j))
         ax.set_title(r'$p(x_{}, x_{})$ at time = {:.4f}'.format(i, j, self.final_time))
@@ -465,7 +482,7 @@ class FKSimGrid3_2:
 
         fig = plt.figure(figsize=(8, 8))
         ax = fig.add_subplot(111)
-        im = ax.plot_surface(x, y, p, cmap='inferno')
+        im = ax.plot_surface(x, y, p, cmap='inferno_r')
         ax.set_xlabel(r'$x_{}$'.format(i))
         ax.set_ylabel(r'$x_{}$'.format(j))
         ax.set_zlabel('p({})'.format(word))
@@ -573,7 +590,7 @@ class FKSimGrid2:
 
         fig = plt.figure(figsize=(8, 8))
         ax = fig.add_subplot(111)
-        im = ax.pcolormesh(x, y, p, cmap='inferno', shading='auto')
+        im = ax.pcolormesh(x, y, p, cmap='inferno_r', shading='auto')
         ax.set_xlabel(r'$x_{}$'.format(i))
         ax.set_ylabel(r'$x_{}$'.format(j))
         ax.set_title(r'$p(x_{}, x_{})$ at time = {:.4f}'.format(i, j, self.final_time))
@@ -618,7 +635,7 @@ class FKSimGrid2:
 
         fig = plt.figure(figsize=(8, 8))
         ax = fig.add_subplot(111, projection='3d')
-        im = ax.plot_surface(x, y, p, cmap='inferno')
+        im = ax.plot_surface(x, y, p, cmap='inferno_r')
         ax.set_xlabel(r'$x_{}$'.format(i))
         ax.set_ylabel(r'$x_{}$'.format(j))
         ax.set_zlabel('p({})'.format(word))
@@ -740,7 +757,7 @@ class Net2Net:
 
         fig = plt.figure(figsize=(8, 8))
         ax = fig.add_subplot(111)
-        im = ax.pcolormesh(X, Y, p, cmap='inferno', shading='auto')
+        im = ax.pcolormesh(X, Y, p, cmap='inferno_r', shading='auto')
         ax.set_xlabel(r'$x_{}$'.format(i))
         ax.set_ylabel(r'$x_{}$'.format(j))
         ax.set_title(r'$p(x_{}, x_{})$ at time = {:.4f}'.format(i, j, self.t))
@@ -899,7 +916,7 @@ class PlotNet3_2:
 
         fig = plt.figure(figsize=(8, 8))
         ax = fig.add_subplot(111)
-        im = ax.pcolormesh(x, y, p, cmap='inferno', shading='auto')
+        im = ax.pcolormesh(x, y, p, cmap='inferno_r', shading='auto')
         ax.set_xlabel(r'$x_{}$'.format(i))
         ax.set_ylabel(r'$x_{}$'.format(j))
         ax.set_title(r'learned $p(x_{}, x_{})$'.format(i, j))
@@ -1004,7 +1021,7 @@ class FKSlice2:
 
         fig = plt.figure(figsize=(8, 8))
         ax = fig.add_subplot(111)
-        im = ax.pcolormesh(x, y, p, cmap='inferno', shading='auto')
+        im = ax.pcolormesh(x, y, p, cmap='inferno_r', shading='auto')
         ax.set_xlabel(r'$x_{}$'.format(i))
         ax.set_ylabel(r'$x_{}$'.format(j))
         condition = ''
@@ -1014,7 +1031,7 @@ class FKSlice2:
             if idx + 1 < num_cond:
                 condition += ','
 
-        ax.set_title(r'$p(x_{}, x_{} | {})$ at time = {:.4f}'.format(i, j, condition, self.final_time))
+        ax.set_title(r'$p(x_{}, x_{}, {})$ at time = {:.4f}'.format(i, j, condition, self.final_time))
         fig.colorbar(im)
         plt.savefig('{}/p_slice_{}_{}_steps_{}.png'.format(self.save_folder, i, j, self.n_steps))
 
