@@ -180,7 +180,7 @@ class MCProb:
         
         fig = plt.figure(figsize=(8, 8))
         ax = fig.add_subplot(111)
-        im = ax.pcolormesh(x, y, prob, cmap='inferno_r', shading='auto')
+        im = ax.pcolormesh(x, y, prob.T, cmap='inferno_r', shading='auto')
         cbar = fig.colorbar(im)
         cbar.ax.tick_params(labelsize=self.cbar_tick_size)
         ax.set_xlabel(r'$x_{}$'.format(i))
