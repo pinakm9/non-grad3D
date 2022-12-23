@@ -173,10 +173,11 @@ class MCProb:
         for k, b in enumerate(boxes):
             prob[int(b[0]), int(b[1])] = counts[k] 
 
-        prob /= np.sum(prob) * self.grid.h[i] * self.grid.h[j]
-        x, y = np.meshgrid(x, y)
+        prob /= (np.sum(prob) * self.grid.h[i] * self.grid.h[j])
         if not save:
             return prob
+        x, y = np.meshgrid(x, y)
+        
         fig = plt.figure(figsize=(8, 8))
         ax = fig.add_subplot(111)
         im = ax.pcolormesh(x, y, prob, cmap='inferno_r', shading='auto')
