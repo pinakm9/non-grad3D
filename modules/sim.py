@@ -533,31 +533,31 @@ class FKSim3_2:
             n_repeats: number of simulations per grid point
         """
         i, j, k = 0, 1, 2 
-        x = np.linspace(self.grid.mins[i], self.grid.maxs[i], num=self.n_subdivs+1).astype(self.dtype)[:1]
-        y = np.linspace(self.grid.mins[j], self.grid.maxs[j], num=self.n_subdivs+1).astype(self.dtype)[:1]
-        z = np.linspace(self.grid.mins[k], self.grid.maxs[k], num=self.n_subdivs+1).astype(self.dtype)[:1]
+        x = np.linspace(self.grid.mins[i], self.grid.maxs[i], num=self.n_subdivs+1).astype(self.dtype)[1:]
+        y = np.linspace(self.grid.mins[j], self.grid.maxs[j], num=self.n_subdivs+1).astype(self.dtype)[1:]
+        z = np.linspace(self.grid.mins[k], self.grid.maxs[k], num=self.n_subdivs+1).astype(self.dtype)[1:]
 
 
-        z, x, y = np.meshgrid(z, x, y, indexing='ij')
+        x, y, z = np.meshgrid(x, y, z, indexing='ij')
         x = x.reshape(-1, 1)
         y = y.reshape(-1, 1)
         z = z.reshape(-1, 1)
 
         X0 = tf.concat([e for _, e in sorted(zip([i, j, k], [x, y, z]))], axis=-1)
-        X = tf.repeat(X0, n_repeats, axis=0)
+        X = tf.repeat(X0, n_repeats, axis=0).numpy()
         n_particles = len(X)
         self.n_steps = n_steps
         self.final_time = dt * n_steps
-
+        print(X.shape)
 
         start = time.time()
         for step in range(n_steps):
             X +=  self.mu(X) * dt + self.sigma * np.random.normal(scale=np.sqrt(dt), size=(n_particles, self.dim))
             if step%1 == 0:
-                print('step = {}, time taken = {:.4f}'.format(step, time.time() - start), end='\r')
-
-        np.save('{}/fk_prop_X0_res_{}.npy'.format(self.save_folder, self.n_subdivs), X.numpy())
-        np.save('{}/fk_prop_XT_res_{}_rep_{}.npy'.format(self.save_folder, self.n_subdivs, n_repeats), X.numpy())
+                pass#print('step = {}, time taken = {:.4f}'.format(step, time.time() - start), end='\r')
+        print(X.shape)
+        np.save('{}/fk_prop_X0_res_{}.npy'.format(self.save_folder, self.n_subdivs), X0.numpy())
+        np.save('{}/fk_prop_XT_res_{}_rep_{}.npy'.format(self.save_folder, self.n_subdivs, n_repeats), X)
         
     
     
@@ -566,7 +566,8 @@ class FKSim3_2:
     def compile(self, n_repeats):
         X0 = np.load('{}/fk_prop_X0_res_{}.npy'.format(self.save_folder, self.n_subdivs))
         X = np.load('{}/fk_prop_XT_res_{}_rep_{}.npy'.format(self.save_folder, self.n_subdivs, n_repeats))
-        h0 = np.sum(self.h0(X).reshape(-1, self.dim, n_repeats), axis=-1).reshape(self.n_subdivs, self.n_subdivs, self.n_subdivs)
+        h0 = tf.reduce_sum(self.h0(X).reshape(-1, self.dim, n_repeats), axis=-1).numpy()
+        h0 = h0.reshape(self.n_subdivs, self.n_subdivs, self.n_subdivs)
         p_inf = tf.exp(self.n_theta(*tf.split(X0, X0.shape[-1], axis=-1))).numpy().reshape(self.n_subdivs, self.n_subdivs, self.n_subdivs)
         p = h0 * p_inf 
         return np.sum(p, axis=2), np.sum(p, axis=0), np.sum(p, axis=1)
