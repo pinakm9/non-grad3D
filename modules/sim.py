@@ -344,8 +344,8 @@ class FKSimGrid3_2:
             gq: boolean flag for using Gauss quadrature
         """
         i, j = set(range(3)) - {k}
-        x = np.linspace(self.grid.mins[i], self.grid.maxs[i], num=self.n_subdivs).astype(self.dtype)
-        y = np.linspace(self.grid.mins[j], self.grid.maxs[j], num=self.n_subdivs).astype(self.dtype)
+        x = np.linspace(self.grid.mins[i], self.grid.maxs[i], num=self.n_subdivs+1).astype(self.dtype)
+        y = np.linspace(self.grid.mins[j], self.grid.maxs[j], num=self.n_subdivs+1).astype(self.dtype)
         if not gq:
             z = np.linspace(self.grid.mins[k], self.grid.maxs[k], num=self.n_int_subdivs + 1).astype(self.dtype)
         else:
@@ -373,7 +373,7 @@ class FKSimGrid3_2:
 
         X = np.nan_to_num(X.numpy(), nan=replace, posinf=replace, neginf=replace)
         X0 = X0.numpy()
-        print(X)
+        #print(X)
         # save data
         q = n_repeats * self.n_subdivs * self.n_subdivs
         l = self.n_subdivs * self.n_subdivs
@@ -495,7 +495,15 @@ class FKSimGrid3_2:
 
 
 
-class FKSimGrid2:
+
+
+
+
+
+
+
+
+class FKSim3_2:
     """
     Description: Feynman-Kac simulation for a 2D grid taking integration 
     in the other dimension into consideration
@@ -506,11 +514,11 @@ class FKSimGrid2:
         self.mu = mu 
         self.sigma = sigma
         self.n_theta = n_theta
-        self.n_subdivs = n_subdivs       
+        self.n_subdivs = n_subdivs
         self.h0 = h0
         self.dtype = dtype
         self.save_folder = save_folder
-        self.dim = 2
+        self.dim = 3
 
         
 
@@ -523,20 +531,19 @@ class FKSimGrid2:
             n_steps: number of steps in Euler-Maruyama
             dt: time-step in Euler-Maruyama
             n_repeats: number of simulations per grid point
-            k: index specifying the dimension to integrate along
-            gq: boolean flag for using Gauss quadrature
         """
-        i, j = 0, 1
-        x = np.linspace(self.grid.mins[i], self.grid.maxs[i], num=self.n_subdivs).astype(self.dtype)
-        y = np.linspace(self.grid.mins[j], self.grid.maxs[j], num=self.n_subdivs).astype(self.dtype)
+        i, j, k = 0, 1, 2 
+        x = np.linspace(self.grid.mins[i], self.grid.maxs[i], num=self.n_subdivs+1).astype(self.dtype)[:1]
+        y = np.linspace(self.grid.mins[j], self.grid.maxs[j], num=self.n_subdivs+1).astype(self.dtype)[:1]
+        z = np.linspace(self.grid.mins[k], self.grid.maxs[k], num=self.n_subdivs+1).astype(self.dtype)[:1]
 
-        x, y = np.meshgrid(x, y, indexing='ij')
+
+        z, x, y = np.meshgrid(z, x, y, indexing='ij')
         x = x.reshape(-1, 1)
         y = y.reshape(-1, 1)
-        
+        z = z.reshape(-1, 1)
 
-        X0 = tf.concat([x, y], axis=-1)
-        self.dim = X0.shape[-1]
+        X0 = tf.concat([e for _, e in sorted(zip([i, j, k], [x, y, z]))], axis=-1)
         X = tf.repeat(X0, n_repeats, axis=0)
         n_particles = len(X)
         self.n_steps = n_steps
@@ -549,221 +556,37 @@ class FKSimGrid2:
             if step%1 == 0:
                 print('step = {}, time taken = {:.4f}'.format(step, time.time() - start), end='\r')
 
-        X = X.numpy()
-        X0 = X0.numpy()
-        # save data
-        pd.DataFrame(X0).to_csv('{}/{}{}0.csv'.format(self.save_folder, i, j), index=None, header=None)
-        pd.DataFrame(X).to_csv('{}/{}{}T_rep_{}_steps_{}.csv'.format(self.save_folder, i, j, n_repeats, n_steps), index=None, header=None)
+        np.save('{}/fk_prop_X0_res_{}.npy'.format(self.save_folder, self.n_subdivs), X.numpy())
+        np.save('{}/fk_prop_XT_res_{}_rep_{}.npy'.format(self.save_folder, self.n_subdivs, n_repeats), X.numpy())
+        
     
     
 
     @ut.timer
     def compile(self, n_repeats):
-        i, j = 0, 1
-        x = np.linspace(self.grid.mins[i], self.grid.maxs[i], num=self.n_subdivs).astype(self.dtype)
-        y = np.linspace(self.grid.mins[j], self.grid.maxs[j], num=self.n_subdivs).astype(self.dtype)
-        x, y = np.meshgrid(x, y)
-        x = x.reshape(-1, 1)
-        y = y.reshape(-1, 1)
-     
-        n_particles = self.n_subdivs * self.n_subdivs
-        
-        p = np.zeros(n_particles)
-        start = time.time()
-        
-     
-        X = np.genfromtxt('{}/{}{}T_rep_{}_steps_{}.csv'.format(self.save_folder, i, j, n_repeats, self.n_steps), delimiter=',', dtype=self.dtype)
-        h = np.sum(self.h0(X).reshape((n_particles, n_repeats)), axis=-1) / n_repeats
-        X0 = np.genfromtxt('{}/{}{}0.csv'.format(self.save_folder, i, j), delimiter=',', dtype=self.dtype)
-        p_inf = tf.exp(self.n_theta(*tf.split(X0, X0.shape[-1], axis=-1))).numpy().flatten()
-        p = h * p_inf
-        print(h)
-        print(np.mean((tf.reduce_sum(X0**2, axis=-1)-1.)**2))
-        print(np.mean(p_inf))
-        print(p)
-        p /= p.sum()
-        pd.DataFrame(p).to_csv('{}/p_{}_{}.csv'.format(self.save_folder, i, j), index=None, header=None)
-
-        grid = (self.n_subdivs, self.n_subdivs)
-        x = x.reshape(grid)
-        y = y.reshape(grid)
-        p = p.reshape(grid)
-
-        fig = plt.figure(figsize=(8, 8))
-        ax = fig.add_subplot(111)
-        im = ax.pcolormesh(x, y, p, cmap='inferno_r', shading='auto')
-        ax.set_xlabel(r'$x_{}$'.format(i))
-        ax.set_ylabel(r'$x_{}$'.format(j))
-        ax.set_title(r'$p(x_{}, x_{})$ at time = {:.4f}'.format(i, j, self.final_time))
-        fig.colorbar(im)
-        plt.savefig('{}/p_{}_{}_steps_{}.png'.format(self.save_folder, i, j, self.n_steps))
-
-    @ut.timer
-    def propagate_and_compile(self, n_steps, dt, n_repeats):
-        self.propagate(n_steps, dt, n_repeats)
-        self.compile(n_repeats)
-
-
-    def plot3d(self, rest_values=[]):
-        i, j = 0, 1
-        rest = set(range(self.dim)) - {i, j}
-        x = np.linspace(self.grid.mins[i], self.grid.maxs[i], num=self.n_subdivs).astype(self.dtype)
-        y = np.linspace(self.grid.mins[j], self.grid.maxs[j], num=self.n_subdivs).astype(self.dtype)
-        x, y = np.meshgrid(x, y)
-    
-        p = np.genfromtxt('{}/p_{}_{}.csv'.format(self.save_folder, i, j), delimiter=',')
-        
-        grid = (self.n_subdivs, self.n_subdivs)
-        x = x.reshape(grid)
-        y = y.reshape(grid)
-        p = p.reshape(grid)
-
-        
-        if rest_values is not None:
-            word = ''
-            k = 0
-            for d in range(self.dim):
-                if d in rest:
-                    word += r'$x_{}={}$'.format(d, rest_values[k])
-                    k += 1
-                else:
-                    word += r'$x_{}$'.format(d)
-                if d < self.dim - 1:
-                    word += ', '
-        else:
-            word = r'$x_{}, x_{}$'.format(0, 1)
-
-
-        fig = plt.figure(figsize=(8, 8))
-        ax = fig.add_subplot(111, projection='3d')
-        im = ax.plot_surface(x, y, p, cmap='inferno_r')
-        ax.set_xlabel(r'$x_{}$'.format(i))
-        ax.set_ylabel(r'$x_{}$'.format(j))
-        ax.set_zlabel('p({})'.format(word))
-        #fig.colorbar(im)
-        plt.savefig('{}/p_{}_{}.png'.format(self.save_folder, i, j))
+        X0 = np.load('{}/fk_prop_X0_res_{}.npy'.format(self.save_folder, self.n_subdivs))
+        X = np.load('{}/fk_prop_XT_res_{}_rep_{}.npy'.format(self.save_folder, self.n_subdivs, n_repeats))
+        h0 = np.sum(self.h0(X).reshape(-1, self.dim, n_repeats), axis=-1).reshape(self.n_subdivs, self.n_subdivs, self.n_subdivs)
+        p_inf = tf.exp(self.n_theta(*tf.split(X0, X0.shape[-1], axis=-1))).numpy().reshape(self.n_subdivs, self.n_subdivs, self.n_subdivs)
+        p = h0 * p_inf 
+        return np.sum(p, axis=2), np.sum(p, axis=0), np.sum(p, axis=1)
 
 
 
-class Net2Net:
-    """
-    Class for interpolating a solution as a network from the steady-state network
-    """
-    def __init__(self, mu, sigma, t, n_steps, dt, X0, n_repeats, save_folder):
-        self.mu = mu
-        self.sigma = sigma
-        self.t = t 
-        self.save_folder = save_folder
-        self.n_steps = n_steps
-        self.dt = dt
-        self.X0 = X0
-        self.n_repeats = n_repeats
-        self.dim = X0.shape[-1]
-        self.n_particles = X0.shape[0]
-
-    @ut.timer
-    def propagate(self):
-        X = tf.repeat(self.X0, self.n_repeats, axis=0)
-        pd.DataFrame(self.X0.numpy()).to_csv('{}/random_starting_points.csv'.format(self.save_folder), index=None, header=None)
-        start = time.time()
-        for step in range(self.n_steps):
-            dW = np.random.normal(scale=np.sqrt(self.dt), size=(self.n_particles * self.n_repeats, self.dim)).astype(DTYPE)
-            X += self.mu(X) * self.dt + self.sigma * dW
-            if step%10 == 0:
-                print('step = {}, time taken = {:.4f}'.format(step, time.time() - start), end='\r')
-        pd.DataFrame(X.numpy()).to_csv('{}/ending_points_at_{}.csv'.format(self.save_folder, self.t), index=None, header=None)
-
-    
-    @ut.timer
-    def gen_prob(self, log_p_inf, h0):
-        X = np.genfromtxt('{}/ending_points_at_{}.csv'.format(self.save_folder, self.t), delimiter=',').astype(DTYPE)
-        X0 = np.genfromtxt('{}/random_starting_points.csv'.format(self.save_folder), delimiter=',').astype(DTYPE)
-        h = np.sum(h0(X).reshape((self.n_particles, self.n_repeats)), axis=-1) / self.n_repeats
-        p_inf = tf.exp(log_p_inf(*tf.split(X0, X0.shape[-1], axis=-1))).numpy().flatten()
-        p = h.flatten() * p_inf
-        pd.DataFrame(p).to_csv('{}/prob_at_{}.csv'.format(self.save_folder, self.t), index=None, header=None)   
-    
-
-    def loss(self, net, x, y):
-        return tf.reduce_mean((net(*tf.split(x, self.dim, axis=-1)) - y)**2)
-
-    @tf.function
-    def train_step(self, optimizer, net, x, y):
-        with tf.GradientTape() as tape:
-            L = self.loss(net, x, y)
-        grads = tape.gradient(L, net.trainable_weights)
-        optimizer.apply_gradients(zip(grads, net.trainable_weights))
-        return L        
 
 
-    @ut.timer
-    def interpolate(self, net, X, p, epochs, batch_size=1000):
-        # p_ = p.flatten()
-        # self.mean = np.mean(p_)
-        # self.std = np.std(p_)
-        # p = (p_ - self.mean) / self.std
-        p = p.reshape(-1, 1)
-        data = tf.data.Dataset.from_tensor_slices((X, p))
-        data = iter(data.shuffle(buffer_size=len(p)).cache().repeat().batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE))
-        
-        idx = np.random.choice(len(p), replace=False, size=batch_size)
-        X0, p0 = X[idx], p[idx]
-        X, p = data.get_next()
-        learning_rate = tf.keras.optimizers.schedules.PiecewiseConstantDecay([1000, 2000, 10000], [1e-2, 5e-3, 1e-3, 1e-3])
-        optimizer = tf.keras.optimizers.Adam(learning_rate)
-        print("{:>6}{:>12}{:>18}".format('Epoch', 'Loss', 'Runtime(s)'))
-        start = time.time()
-        for epoch in range(epochs):
-            L = self.train_step(optimizer, net, X, p)
-            if epoch % 10 == 0:
-                print('{:6d}{:12.6f}{:18.4f}'.format(epoch, L, time.time()-start))
-            if epoch % 100 == 0 and L.numpy() < 0.05:
-                #idx = np.random.choice(len(p), replace=False, size=batch_size)
-                X, p = data.get_next()
-        net.save_weights('{}/interpolation_at_{}'.format(self.save_folder, self.t))
 
 
-    @ut.timer
-    def verify(self, net, mins, maxs, n_subdivs, n_int_subdivs, exp=False):
-        plotter = PlotNet3_2(net, mins, maxs, n_subdivs, n_int_subdivs, exp, self.save_folder)
-        plotter.plot_all(tag='interpolation_at_{}'.format(self.t))
 
-    @ut.timer
-    def project(self, net, mins, maxs, k, n_subdivs):
-        self.n_subdivs = n_subdivs
-        self.mins = mins 
-        self.maxs = maxs
-        i, j = set(range(3)) - {k}
-        X = np.linspace(start=self.mins[i], stop=self.maxs[i], num=self.n_subdivs)
-        Y = np.linspace(start=self.mins[j], stop=self.maxs[j], num=self.n_subdivs)
-        Z = np.linspace(start=self.mins[k], stop=self.maxs[k], num=self.n_subdivs).reshape(-1, 1)
-        
-        p = np.zeros((self.n_subdivs, self.n_subdivs))
-        w = np.array([2. if i%2==0 else 4. for i in range(self.n_subdivs)])
-        w[0] = w[-1] = 1.
-        for l, x in enumerate(X):
-            for m, y in enumerate(Y):
-                x = x * np.ones_like(Z)
-                y = y * np.ones_like(Z)
-                args = [e for _, e in sorted(zip([i, j, k], [x, y, Z]))]
-                v = (net(*args).numpy().flatten()) 
-                p[l, m] = np.sum(v * w)
-        
-        p /= p.sum()
-        grid = (self.n_subdivs, self.n_subdivs)
-        X, Y = np.meshgrid(X, Y)
-        X = X.reshape(grid)
-        Y = Y.reshape(grid)
-        p = p.reshape(grid)
 
-        fig = plt.figure(figsize=(8, 8))
-        ax = fig.add_subplot(111)
-        im = ax.pcolormesh(X, Y, p, cmap='inferno_r', shading='auto')
-        ax.set_xlabel(r'$x_{}$'.format(i))
-        ax.set_ylabel(r'$x_{}$'.format(j))
-        ax.set_title(r'$p(x_{}, x_{})$ at time = {:.4f}'.format(i, j, self.t))
-        fig.colorbar(im)
-        plt.savefig('{}/interpolated_prob_{}_{}_res_{}.png'.format(self.save_folder, i, j, self.n_subdivs))
+
+
+
+
+
+
+
+
 
 
 
@@ -871,180 +694,4 @@ class Evolution:
         ax.set_xlabel('time')
         plt.savefig(self.save_folder + '/exit_prob.png')
         
-
-class PlotNet3_2:
-
-    def __init__(self, n_theta, mins, maxs, n_subdivs, n_int_subdivs, exp, save_folder):
-        self.n_theta = n_theta
-        self.dim = 3
-        self.maxs = maxs
-        self.mins = mins
-        self.n_subdivs = n_subdivs
-        self.n_int_subdivs = n_int_subdivs
-        self.save_folder = save_folder
-        self.dtype = DTYPE
-        self.exp = exp
-    
-    @ut.timer
-    def heatmap(self, k, tag):
-        i, j = set(range(3)) - {k}
-        x = np.linspace(self.mins[i], self.maxs[i], num=self.n_subdivs).astype(self.dtype)
-        y = np.linspace(self.mins[j], self.maxs[j], num=self.n_subdivs).astype(self.dtype)
-        z = np.linspace(self.mins[k], self.maxs[k], num=self.n_int_subdivs+1).astype(self.dtype)
-        
-        z = z.reshape(-1, 1)
-
-        p = np.zeros((self.n_subdivs, self.n_subdivs))
-        one = tf.ones_like(z)
-        
-        w = np.array([2. if l%2==0 else 4. for l in range(self.n_int_subdivs+1)])
-        w[0], w[-1] = 1., 1.
-        for l in range(self.n_subdivs):
-            for m in range(self.n_subdivs):
-                args = [e for _, e in sorted(zip([i, j, k], [x[l]*one, y[m]*one, z]))]
-                if self.exp:
-                    p[l, m] = (tf.exp(self.n_theta(*args)).numpy().flatten() * w).sum()
-                else:
-                    p[l, m] = (self.n_theta(*args).numpy().flatten() * w).sum()
-
-
-        p /= np.sum(p)
-        grid = (self.n_subdivs, self.n_subdivs)
-        x, y = np.meshgrid(x, y)
-        # x = x.reshape(grid)
-        # y = y.reshape(grid)
-        # p = p.reshape(grid)
-
-        fig = plt.figure(figsize=(8, 8))
-        ax = fig.add_subplot(111)
-        im = ax.pcolormesh(x, y, p, cmap='inferno_r', shading='auto')
-        ax.set_xlabel(r'$x_{}$'.format(i))
-        ax.set_ylabel(r'$x_{}$'.format(j))
-        ax.set_title(r'learned $p(x_{}, x_{})$'.format(i, j))
-        fig.colorbar(im)
-        plt.savefig('{}/{}_{}_{}.png'.format(self.save_folder, tag, i, j))
-      
-
-    @ut.timer
-    def plot_all(self, tag):
-        for k in range(self.dim):
-            self.heatmap(k, tag) 
-
-
-
-class FKSlice2:
-    """
-    Description: Feynman-Kac simulation for a 2D grid taking integration 
-    in the other dimension into consideration
-    """
-    def __init__(self, save_folder, n_subdivs, mu, sigma, n_theta, grid,\
-                h0, dim, dtype='float32') -> None:
-        self.grid = grid 
-        self.mu = mu 
-        self.sigma = sigma
-        self.n_theta = n_theta
-        self.n_subdivs = n_subdivs         
-        self.h0 = h0
-        self.dtype = dtype
-        self.save_folder = save_folder
-        self.dim = dim
-        
-
-    @ut.timer
-    def propagate(self, n_steps, dt, n_repeats, levels):
-        """
-        Description: propagates particles according to the SDE and stores the final positions
-
-        Args:
-            n_steps: number of steps in Euler-Maruyama
-            dt: time-step in Euler-Maruyama
-            n_repeats: number of simulations per grid point
-            levels: dict specifying fixed levels
-        """
-        i, j = sorted(set(range(self.dim)) - set(levels.keys()))
-        x = np.linspace(self.grid.mins[i], self.grid.maxs[i], num=self.n_subdivs).astype(self.dtype)
-        y = np.linspace(self.grid.mins[j], self.grid.maxs[j], num=self.n_subdivs).astype(self.dtype)
-        
-
-        x, y = np.meshgrid(x, y, indexing='ij')
-        x = x.reshape(-1, 1)
-        y = y.reshape(-1, 1)
-        z = [value * np.ones_like(x) for key, value in levels.items()]
-
-        X0 = tf.concat([e for _, e in sorted(zip([i, j] + list(levels.keys()), [x, y] + z))], axis=-1)
-        X = tf.repeat(X0, n_repeats, axis=0)
-        n_particles = len(X)
-        self.n_steps = n_steps
-        self.final_time = dt * n_steps
-
-
-        start = time.time()
-        for step in range(n_steps):
-            X +=  self.mu(X) * dt + self.sigma * np.random.normal(scale=np.sqrt(dt), size=(n_particles, self.dim))
-            if step%1 == 0:
-                print('step = {}, time taken = {:.4f}'.format(step, time.time() - start), end='\r')
-
-        pd.DataFrame(X0.numpy()).to_csv('{}/{}{}0.csv'.format(self.save_folder, i, j), index=None, header=None)
-        pd.DataFrame(X.numpy()).to_csv('{}/{}{}T_rep_{}_steps_{}.csv'.format(self.save_folder, i, j, n_repeats, n_steps), index=None, header=None)
-    
-    
-
-    @ut.timer
-    def compile(self, n_repeats, levels):
-        i, j = sorted(set(range(self.dim)) - set(levels.keys()))
-        x = np.linspace(self.grid.mins[i], self.grid.maxs[i], num=self.n_subdivs).astype(self.dtype)
-        y = np.linspace(self.grid.mins[j], self.grid.maxs[j], num=self.n_subdivs).astype(self.dtype)
-        x, y = np.meshgrid(x, y)
-        x = x.reshape(-1, 1)
-        y = y.reshape(-1, 1)
-     
-        n_particles = self.n_subdivs * self.n_subdivs
-
-        
-        letters = ['x', 'y', 'z']
-        start = time.time()
-       
-        z = [value * np.ones_like(x) for key, value in levels.items()]
-        X = np.genfromtxt('{}/{}{}T_rep_{}_steps_{}.csv'.format(self.save_folder, i, j, n_repeats, self.n_steps), delimiter=',', dtype=self.dtype)
-        h0 = self.h0(X).reshape((n_particles, n_repeats))
-        h = np.sum(h0, axis=-1) / n_repeats
-        X0 = np.genfromtxt('{}/{}{}0.csv'.format(self.save_folder, i, j), delimiter=',', dtype=self.dtype)
-        p_inf = tf.exp(self.n_theta(*tf.split(X0, X0.shape[-1], axis=-1))).numpy().flatten()
-        p = h * p_inf
-        if p.sum() > 0.:
-            p /= p.sum()
-        pd.DataFrame(p).to_csv('{}/p_{}_{}.csv'.format(self.save_folder, i, j), index=None, header=None)
-
-        grid = (self.n_subdivs, self.n_subdivs)
-        x = x.reshape(grid)
-        y = y.reshape(grid)
-        p = p.reshape(grid)
-
-        fig = plt.figure(figsize=(8, 8))
-        ax = fig.add_subplot(111)
-        im = ax.pcolormesh(x, y, p, cmap='inferno_r', shading='auto')
-        ax.set_xlabel(r'$x_{}$'.format(i))
-        ax.set_ylabel(r'$x_{}$'.format(j))
-        condition = ''
-        num_cond = len(levels.items())
-        for idx, item in enumerate(levels.items()):
-            condition += 'x_{}={}'.format(item[0], item[1])
-            if idx + 1 < num_cond:
-                condition += ','
-
-        ax.set_title(r'$p(x_{}, x_{}, {})$ at time = {:.4f}'.format(i, j, condition, self.final_time))
-        fig.colorbar(im)
-        plt.savefig('{}/p_slice_{}_{}_steps_{}.png'.format(self.save_folder, i, j, self.n_steps))
-
-    @ut.timer
-    def propagate_and_compile(self, n_steps, dt, n_repeats, levels):
-        self.propagate(n_steps, dt, n_repeats, levels)
-        self.compile(n_repeats, levels)
-
-    # @ut.timer
-    # def compute_all(self, n_steps, dt, n_repeats, levels={0: 0., 1: 0., 2: 0.}):
-    #     for k in range(3):
-    #         self.propagate_and_compile(n_steps, dt, n_repeats, k, levels[k])
-
-
 
