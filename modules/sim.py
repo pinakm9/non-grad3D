@@ -180,7 +180,7 @@ class MCProb:
         
         fig = plt.figure(figsize=(8, 8))
         ax = fig.add_subplot(111)
-        im = ax.pcolormesh(x, y, prob.T, cmap='inferno_r', shading='auto')
+        im = ax.pcolormesh(x, y, prob, cmap='inferno_r', shading='auto')
         cbar = fig.colorbar(im)
         cbar.ax.tick_params(labelsize=self.cbar_tick_size)
         ax.set_xlabel(r'$x_{}$'.format(i))
@@ -508,22 +508,23 @@ class FKSim3_2:
     Description: Feynman-Kac simulation for a 2D grid taking integration 
     in the other dimension into consideration
     """
-    def __init__(self, save_folder, n_subdivs, mu, sigma, n_theta, grid,\
+    def __init__(self, save_folder, n_subdivs, n_int_subdivs, mu, sigma, sol, grid,\
                 h0, dtype='float32') -> None:
         self.grid = grid 
         self.mu = mu 
         self.sigma = sigma
-        self.n_theta = n_theta
+        self.sol = sol
         self.n_subdivs = n_subdivs
         self.h0 = h0
         self.dtype = dtype
         self.save_folder = save_folder
         self.dim = 3
+        self.n_int_subdivs = n_int_subdivs
 
         
 
     @ut.timer
-    def propagate(self, n_steps, dt, n_repeats):
+    def make_plot(self, n_steps, dt, n_repeats, i, j, k):
         """
         Description: propagates particles according to the SDE and stores the final positions
 
@@ -531,47 +532,51 @@ class FKSim3_2:
             n_steps: number of steps in Euler-Maruyama
             dt: time-step in Euler-Maruyama
             n_repeats: number of simulations per grid point
+            i: x dimension
+            j: y dimension 
+            k: dimension to be integrated out 
         """
-        i, j, k = 0, 1, 2 
         x = np.linspace(self.grid.mins[i], self.grid.maxs[i], num=self.n_subdivs+1).astype(self.dtype)[1:]
         y = np.linspace(self.grid.mins[j], self.grid.maxs[j], num=self.n_subdivs+1).astype(self.dtype)[1:]
-        z = np.linspace(self.grid.mins[k], self.grid.maxs[k], num=self.n_subdivs+1).astype(self.dtype)[1:]
+        z = np.linspace(self.grid.mins[k], self.grid.maxs[k], num=self.n_int_subdivs+1).astype(self.dtype).reshape(-1, 1)
+        ones = tf.ones_like(z)
+        prob = np.zeros((self.n_subdivs, self.n_subdivs))
 
-
-        x, y, z = np.meshgrid(x, y, z, indexing='ij')
-        x = x.reshape(-1, 1)
-        y = y.reshape(-1, 1)
-        z = z.reshape(-1, 1)
-
-        X0 = tf.concat([e for _, e in sorted(zip([i, j, k], [x, y, z]))], axis=-1)
-        X = tf.repeat(X0, n_repeats, axis=0).numpy()
-        n_particles = len(X)
         self.n_steps = n_steps
         self.final_time = dt * n_steps
-        print(X.shape)
+        weights = np.ones_like(z)
+        # for iw, w in enumerate(weights):
+        #     if iw % 2 == 0 and iw > 0:
+        #         weights[iw][0] = 2.
+        #     else:
+        #         weights[iw][0] = 4.
+        weights[0][0] = 0.5
+        weights[-1][0] = 0.5
+
+        h = (self.grid.maxs[k] - self.grid.mins[k]) / self.n_int_subdivs
 
         start = time.time()
-        for step in range(n_steps):
-            X +=  self.mu(X) * dt + self.sigma * np.random.normal(scale=np.sqrt(dt), size=(n_particles, self.dim))
-            if step%1 == 0:
-                pass#print('step = {}, time taken = {:.4f}'.format(step, time.time() - start), end='\r')
-        print(X.shape)
-        np.save('{}/fk_prop_X0_res_{}.npy'.format(self.save_folder, self.n_subdivs), X0.numpy())
-        np.save('{}/fk_prop_XT_res_{}_rep_{}.npy'.format(self.save_folder, self.n_subdivs, n_repeats), X)
+        for m in range(self.n_subdivs):
+            for n in range(self.n_subdivs):
+                X0 = tf.concat([e for _, e in sorted(zip([i, j, k], [x[m]*ones, y[n]*ones, z]))], axis=-1).numpy()
+                p_inf = self.sol(X0)
+                X = np.repeat(X0, repeats=n_repeats, axis=0)
+                for step in range(n_steps):
+                    X +=  self.mu(X) * dt + self.sigma * np.random.normal(scale=np.sqrt(dt), size=X.shape)
+                    if step%10 == 0:
+                        print('grid_index = {}, step = {}, time taken = {:.4f}'.format((m, n), step, time.time() - start), end='\r')
+                h0 = tf.reduce_mean(self.h0(X).reshape((-1, n_repeats)), axis=-1, keepdims=True).numpy()
+                prob[m][n] = np.sum(h0 * p_inf * weights) * h 
+        
+        return prob
+
+
+        
         
     
     
 
-    @ut.timer
-    def compile(self, n_repeats):
-        X0 = np.load('{}/fk_prop_X0_res_{}.npy'.format(self.save_folder, self.n_subdivs))
-        X = np.load('{}/fk_prop_XT_res_{}_rep_{}.npy'.format(self.save_folder, self.n_subdivs, n_repeats))
-        h0 = tf.reduce_sum(self.h0(X).reshape(-1, self.dim, n_repeats), axis=-1).numpy()
-        h0 = h0.reshape(self.n_subdivs, self.n_subdivs, self.n_subdivs)
-        p_inf = tf.exp(self.n_theta(*tf.split(X0, X0.shape[-1], axis=-1))).numpy().reshape(self.n_subdivs, self.n_subdivs, self.n_subdivs)
-        p = h0 * p_inf 
-        return np.sum(p, axis=2), np.sum(p, axis=0), np.sum(p, axis=1)
-
+    
 
 
 
