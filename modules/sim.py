@@ -311,7 +311,10 @@ class MCProb:
 
 
 
-class FKSimGrid3_2:
+
+
+
+class FKSim3_2:
     """
     Description: Feynman-Kac simulation for a 2D grid taking integration 
     in the other dimension into consideration
@@ -321,205 +324,47 @@ class FKSimGrid3_2:
         self.grid = grid 
         self.mu = mu 
         self.sigma = sigma
-        self.n_theta = n_theta
-        self.n_subdivs = n_subdivs
-        self.n_int_subdivs = n_int_subdivs         
-        self.h0 = h0
-        self.dtype = dtype
-        self.save_folder = save_folder
-        self.dim = 3
-
-        
-
-    @ut.timer
-    def propagate(self, n_steps, dt, n_repeats, k, gq=False, replace=100.):
-        """
-        Description: propagates particles according to the SDE and stores the final positions
-
-        Args:
-            n_steps: number of steps in Euler-Maruyama
-            dt: time-step in Euler-Maruyama
-            n_repeats: number of simulations per grid point
-            k: index specifying the dimension to integrate along
-            gq: boolean flag for using Gauss quadrature
-        """
-        i, j = set(range(3)) - {k}
-        x = np.linspace(self.grid.mins[i], self.grid.maxs[i], num=self.n_subdivs+1).astype(self.dtype)
-        y = np.linspace(self.grid.mins[j], self.grid.maxs[j], num=self.n_subdivs+1).astype(self.dtype)
-        if not gq:
-            z = np.linspace(self.grid.mins[k], self.grid.maxs[k], num=self.n_int_subdivs + 1).astype(self.dtype)
-        else:
-            gq = np.genfromtxt('{}/gq_{}.csv'.format(self.save_folder, self.n_int_subdivs), delimiter=',').astype(self.dtype)
-            a, b = self.grid.mins[k], self.grid.maxs[k]
-            z = (gq[:, 1] * (b - a) + (b + a)) / 2.
-
-        z, x, y = np.meshgrid(z, x, y, indexing='ij')
-        x = x.reshape(-1, 1)
-        y = y.reshape(-1, 1)
-        z = z.reshape(-1, 1)
-
-        X0 = tf.concat([e for _, e in sorted(zip([i, j, k], [x, y, z]))], axis=-1)
-        X = tf.repeat(X0, n_repeats, axis=0)
-        n_particles = len(X)
-        self.n_steps = n_steps
-        self.final_time = dt * n_steps
-
-
-        start = time.time()
-        for step in range(n_steps):
-            X +=  self.mu(X) * dt + self.sigma * np.random.normal(scale=np.sqrt(dt), size=(n_particles, self.dim))
-            if step%1 == 0:
-                print('step = {}, time taken = {:.4f}'.format(step, time.time() - start), end='\r')
-
-        X = np.nan_to_num(X.numpy(), nan=replace, posinf=replace, neginf=replace)
-        X0 = X0.numpy()
-        #print(X)
-        # save data
-        q = n_repeats * self.n_subdivs * self.n_subdivs
-        l = self.n_subdivs * self.n_subdivs
-        letters = ['x', 'y', 'z']
-        for n in range(self.n_int_subdivs + 1):
-            pd.DataFrame(X0[n*l: (n+1)*l, :]).to_csv('{}/{}{}0_{}.csv'.format(self.save_folder, i, j, n), index=None, header=None)
-            pd.DataFrame(X[n*q: (n+1)*q, :]).to_csv('{}/{}{}T_{}_rep_{}_steps_{}.csv'.format(self.save_folder, i, j, n, n_repeats, n_steps), index=None, header=None)
-    
-    
-
-    @ut.timer
-    def compile(self, n_repeats, k, gq=False, replace=0.):
-        i, j = set(range(3)) - {k}
-        x = np.linspace(self.grid.mins[i], self.grid.maxs[i], num=self.n_subdivs).astype(self.dtype)
-        y = np.linspace(self.grid.mins[j], self.grid.maxs[j], num=self.n_subdivs).astype(self.dtype)
-        x, y = np.meshgrid(x, y)
-        x = x.reshape(-1, 1)
-        y = y.reshape(-1, 1)
-     
-        n_particles = self.n_subdivs * self.n_subdivs
-        if not gq:
-            Z = np.linspace(self.grid.mins[k], self.grid.maxs[k], num=self.n_int_subdivs + 1).astype(self.dtype)
-            w = np.array([2. if i%2==0 else 4. for i in range(self.n_int_subdivs + 1)])
-            w[0] = w[-1] = 1.
-            w *=  (self.grid.maxs[k] - self.grid.mins[k]) / (3. * self.n_int_subdivs)
-        else:
-            gq = np.genfromtxt('{}/gq_{}.csv'.format(self.save_folder, self.n_int_subdivs), delimiter=',').astype(self.dtype)
-            a, b = self.grid.mins[k], self.grid.maxs[k]
-            Z = (gq[:, 1] * (b - a) + (b + a)) / 2.
-            w = gq[:, 0]
-            w *= (self.grid.h[i] * self.grid.h[j]) * (self.grid.maxs[k] - self.grid.mins[k]) / 2.
-        
-        p = np.zeros(n_particles)
-        letters = ['x', 'y', 'z']
-        start = time.time()
-        for l, z in enumerate(np.linspace(self.grid.mins[k], self.grid.maxs[k], num=self.n_int_subdivs + 1).astype(self.dtype)):
-            z = z * np.ones_like(x)
-            X = np.genfromtxt('{}/{}{}T_{}_rep_{}_steps_{}.csv'.format(self.save_folder, i, j, l, n_repeats, self.n_steps), delimiter=',', dtype=self.dtype)
-            # X = tf.convert_to_tensor(X)
-            #print("------------->shape of X = {}<---------------".format(X.shape))
-            h0 = np.nan_to_num(self.h0(X).reshape((n_particles, n_repeats)), nan=replace, posinf=replace, neginf=replace)
-            h = np.sum(h0, axis=-1) / n_repeats
-            X0 = np.genfromtxt('{}/{}{}0_{}.csv'.format(self.save_folder, i, j, l), delimiter=',', dtype=self.dtype)
-            p_inf = tf.exp(self.n_theta(*tf.split(X0, X0.shape[-1], axis=-1))).numpy().flatten()
-            p_ = h * p_inf
-            # save data
-            pd.DataFrame(p_).to_csv('{}/p_{}_{}_{}.csv'.format(self.save_folder, i, j, l), index=None, header=None)
-            print('z count = {}, time taken = {:.4f}'.format(i, time.time() - start), end='\r')
-            p += w[l] * p_   
-        if p.sum() > 0.:
-            p /= p.sum()
-        pd.DataFrame(p).to_csv('{}/p_{}_{}.csv'.format(self.save_folder, i, j), index=None, header=None)
-
-        grid = (self.n_subdivs, self.n_subdivs)
-        x = x.reshape(grid)
-        y = y.reshape(grid)
-        p = p.reshape(grid)
-
-        fig = plt.figure(figsize=(8, 8))
-        ax = fig.add_subplot(111)
-        im = ax.pcolormesh(x, y, p, cmap='inferno_r', shading='auto')
-        ax.set_xlabel(r'$x_{}$'.format(i))
-        ax.set_ylabel(r'$x_{}$'.format(j))
-        ax.set_title(r'$p(x_{}, x_{})$ at time = {:.4f}'.format(i, j, self.final_time))
-        fig.colorbar(im)
-        plt.savefig('{}/p_{}_{}_steps_{}.png'.format(self.save_folder, i, j, self.n_steps))
-
-    @ut.timer
-    def propagate_and_compile(self, n_steps, dt, n_repeats, k, gq=False, replace=100.):
-        self.propagate(n_steps, dt, n_repeats, k, gq, replace)
-        self.compile(n_repeats, k, gq)
-
-    @ut.timer
-    def compute_all(self, n_steps, dt, n_repeats, gq=False, replace=100.):
-        for k in range(3):
-            self.propagate_and_compile(n_steps, dt, n_repeats, k, gq, replace)
-
-
-    def plot3d(self, idx, rest_values=[]):
-        self.dim = len(idx) + len(rest_values)
-        i, j = idx
-        rest = set(range(self.dim)) - {i, j}
-        x = np.linspace(self.grid.mins[i], self.grid.maxs[i], num=self.n_subdivs).astype(self.dtype)
-        y = np.linspace(self.grid.mins[j], self.grid.maxs[j], num=self.n_subdivs).astype(self.dtype)
-        p = np.genfromtxt('{}/p_{}_{}.csv'.format(self.save_folder, i, j), delimiter=',')
-        
-        grid = (self.n_subdivs, self.n_subdivs)
-        x = x.reshape(grid)
-        y = y.reshape(grid)
-        p = p.reshape(grid)
-
-        
-        if rest_values is not None:
-            word = ''
-            k = 0
-            for d in range(self.dim):
-                if d in rest:
-                    word += r'$x_{}={}$'.format(d, rest_values[k])
-                    k += 1
-                else:
-                    word += r'$x_{}$'.format(d)
-                if d < self.dim - 1:
-                    word += ', '
-        else:
-            word = r'$x_{}, x_{}$'.format(*sorted(idx))
-
-
-        fig = plt.figure(figsize=(8, 8))
-        ax = fig.add_subplot(111)
-        im = ax.plot_surface(x, y, p, cmap='inferno_r')
-        ax.set_xlabel(r'$x_{}$'.format(i))
-        ax.set_ylabel(r'$x_{}$'.format(j))
-        ax.set_zlabel('p({})'.format(word))
-        fig.colorbar(im)
-        plt.savefig('{}/p_{}_{}.png'.format(self.save_folder, i, j))
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-class FKSim3_2:
-    """
-    Description: Feynman-Kac simulation for a 2D grid taking integration 
-    in the other dimension into consideration
-    """
-    def __init__(self, save_folder, n_subdivs, n_int_subdivs, mu, sigma, sol, grid,\
-                h0, dtype='float32') -> None:
-        self.grid = grid 
-        self.mu = mu 
-        self.sigma = sigma
-        self.sol = sol
+        self.net = n_theta
+        self.n_theta = lambda X: n_theta(*tf.split(X, 3, axis=-1)).numpy()
         self.n_subdivs = n_subdivs
         self.h0 = h0
         self.dtype = dtype
         self.save_folder = save_folder
         self.dim = 3
         self.n_int_subdivs = n_int_subdivs
+
+    def sol(self, X):
+        l = len(X)
+        m = int(1e5)
+        M = int(np.ceil(l / m))
+        data = []
+        for i in range(M):
+            if i < M-1:
+                x = X[i*m: (i+1)*m]
+            else:
+                x = X[i*m:] 
+            data.append(np.exp(self.n_theta(x)))
+            
+        return np.concatenate(data, axis=0)
+
+    @tf.function
+    def h_mu(self, X):
+        l = len(X)
+        m = int(1e5)
+        M = int(np.ceil(l / m))
+        data = []
+        for i in range(M):
+            if i < M-1:
+                X_ = X[i*m: (i+1)*m]
+            else:
+                X_ = X[i*m:]
+            x, y, z = tf.split(X_, 3, axis=-1)
+            with tf.GradientTape() as tape:
+                tape.watch([x, y, z])
+                n_ = self.net(x, y, z) 
+            grad_n = tf.concat(tape.gradient(n_, [x, y, z]), axis=-1).numpy()
+            data.append(self.sigma**2*grad_n - self.mu(X_))
+        return data
 
         
 
@@ -562,7 +407,7 @@ class FKSim3_2:
                 p_inf = self.sol(X0)
                 X = np.repeat(X0, repeats=n_repeats, axis=0)
                 for step in range(n_steps):
-                    X +=  self.mu(X) * dt + self.sigma * np.random.normal(scale=np.sqrt(dt), size=X.shape)
+                    X +=  self.h_mu(X) * dt + self.sigma * np.random.normal(scale=np.sqrt(dt), size=X.shape)
                     if step%10 == 0:
                         print('grid_index = {}, step = {}, time taken = {:.4f}'.format((m, n), step, time.time() - start), end='\r')
                 h0 = tf.reduce_mean(self.h0(X).reshape((-1, n_repeats)), axis=-1, keepdims=True).numpy()
