@@ -347,7 +347,7 @@ class FKSim3_2:
             
         return np.concatenate(data, axis=0)
 
-    @tf.function
+    #@tf.function
     def h_mu(self, X):
         l = len(X)
         m = int(1e5)
@@ -362,9 +362,9 @@ class FKSim3_2:
             with tf.GradientTape() as tape:
                 tape.watch([x, y, z])
                 n_ = self.net(x, y, z) 
-            grad_n = tf.concat(tape.gradient(n_, [x, y, z]), axis=-1).numpy()
+            grad_n = tf.concat(tape.gradient(n_, [x, y, z]), axis=-1)
             data.append(self.sigma**2*grad_n - self.mu(X_))
-        return data
+        return tf.concat(data, axis=0).numpy()
 
         
 
